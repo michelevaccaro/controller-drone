@@ -1,0 +1,195 @@
+& {
+$ErrorActionPreference = 'Stop'
+$device = 1
+$serial = [System.IO.Ports.SerialPort]::new('COM5', 115200)
+$serial.ReadTimeout = 80
+$serial.WriteTimeout = 700
+$request = [byte[]](0x55,0x0D,0x04,0x33,0x0A,0x0E,0x03,0x00,0x40,0x06,0x01,0xF4,0x4A)
+$offsets = @(13,16,19,22,25,28,31,34)
+$axes = @(0x30,0x31,0x33,0x34)
+$poll = @{ Interval = 75; Timeout = 450; Last = [Diagnostics.Stopwatch]::StartNew() }
+
+function Read-Sticks {
+    $wait = $poll.Interval - $poll.Last.ElapsedMilliseconds
+    if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }
+    $serial.DiscardInBuffer()
+    $serial.Write($request, 0, $request.Length)
+    $poll.Last.Restart()
+
+    $frame = [byte[]]::new(38)
+    $position = 0
+    while ($poll.Last.ElapsedMilliseconds -lt $poll.Timeout) {
+        $available = $serial.BytesToRead
+        if ($available -eq 0) {
+            Start-Sleep -Milliseconds 2
+            continue
+        }
+        $chunk = [byte[]]::new([Math]::Min(256, $available))
+        try {
+            $count = $serial.Read($chunk, 0, $chunk.Length)
+        } catch [System.TimeoutException] {
+            continue
+        }
+        for ($i = 0; $i -lt $count; $i++) {
+            $byte = $chunk[$i]
+            if ($position -eq 0 -and $byte -ne 0x55) { continue }
+            if ($position -eq 1 -and $byte -ne 0x26) {
+                if ($byte -ne 0x55) { $position = 0 }
+                continue
+            }
+            $frame[$position] = $byte
+            $position++
+            if ($position -eq $frame.Length) {
+                if ($frame[8] -eq 0x80 -and $frame[9] -eq 0x06) {
+                    foreach ($offset in $offsets) { [BitConverter]::ToUInt16($frame, $offset) }
+                    return
+                }
+                $position = 0
+            }
+        }
+    }
+}
+
+function Read-CalibrationSample {
+    for ($attempt = 0; $attempt -lt 4; $attempt++) {
+        $sample = @(Read-Sticks)
+        if ($sample.Count -eq $offsets.Length) { return $sample }
+    }
+    throw 'COM5 non risponde durante la calibrazione. Controlla che il radiocomando sia acceso.'
+}
+
+$acquired = $false
+try {
+    $roots = @($env:ProgramFiles, [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) |
+        Where-Object { $_ } | ForEach-Object { Join-Path $_ 'vJoy' } |
+        Where-Object { Test-Path -LiteralPath $_ } | Select-Object -Unique
+    $machine = if ([IntPtr]::Size -eq 8) { 0x8664 } else { 0x014C }
+    $dll = $roots | ForEach-Object {
+        Get-ChildItem -LiteralPath $_ -Filter vJoyInterface.dll -File -Recurse
+    } | Where-Object {
+        $bytes = [IO.File]::ReadAllBytes($_.FullName)
+        $pe = [BitConverter]::ToInt32($bytes, 60)
+        [BitConverter]::ToUInt16($bytes, $pe + 4) -eq $machine
+    } | Select-Object -First 1
+    if (-not $dll) { throw 'vJoyInterface.dll non trovata nella cartella di installazione di vJoy.' }
+
+    if (-not ('MavicVJoyBridge' -as [type])) {
+        $dllPath = $dll.FullName
+        Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices;
+public static class MavicVJoyBridge {
+    [DllImport(@"$dllPath", CallingConvention=CallingConvention.Cdecl)]
+    public static extern bool AcquireVJD(uint id);
+    [DllImport(@"$dllPath", CallingConvention=CallingConvention.Cdecl)]
+    public static extern void RelinquishVJD(uint id);
+    [DllImport(@"$dllPath", CallingConvention=CallingConvention.Cdecl)]
+    public static extern bool SetAxis(int value, uint id, uint axis);
+    [DllImport(@"$dllPath", CallingConvention=CallingConvention.Cdecl)]
+    public static extern bool GetVJDAxisMin(uint id, uint axis, out int value);
+    [DllImport(@"$dllPath", CallingConvention=CallingConvention.Cdecl)]
+    public static extern bool GetVJDAxisMax(uint id, uint axis, out int value);
+}
+"@
+    }
+
+    $serial.Open()
+    $acquired = [MavicVJoyBridge]::AcquireVJD($device)
+    if (-not $acquired) { throw 'vJoy Device 1 occupato o disabilitato. Chiudi anche vJoy Feeder (Demo).' }
+
+    $null = Read-Host 'Lascia entrambi gli stick al centro e premi Invio'
+    $center = @(Read-CalibrationSample)
+    $directions = @('SINISTRO tutto a DESTRA', 'SINISTRO tutto in BASSO',
+                    'DESTRO tutto a DESTRA', 'DESTRO tutto in BASSO')
+    $mapping = @()
+    for ($axis = 0; $axis -lt $axes.Length; $axis++) {
+        $label = $directions[$axis]
+        while ($true) {
+            $null = Read-Host "Tieni lo stick $label e premi Invio. Lascia fermo l'altro stick"
+            $sample = @(Read-CalibrationSample)
+            $best = -1
+            $delta = 0
+            for ($channel = 0; $channel -lt $offsets.Length; $channel++) {
+                $movement = [int]$sample[$channel] - [int]$center[$channel]
+                if ([Math]::Abs($movement) -gt [Math]::Abs($delta)) {
+                    $best = $channel
+                    $delta = $movement
+                }
+            }
+            if ([Math]::Abs($delta) -ge 100 -and $best -notin $mapping.Channel) { break }
+            Write-Host 'Asse non distinto. Ripeti muovendo solo lo stick indicato.'
+        }
+        $min = 0
+        $max = 0
+        if (-not [MavicVJoyBridge]::GetVJDAxisMin($device, $axes[$axis], [ref]$min) -or
+            -not [MavicVJoyBridge]::GetVJDAxisMax($device, $axes[$axis], [ref]$max)) {
+            throw 'Verifica che X, Y, Rx e Ry siano abilitati in Configure vJoy.'
+        }
+        $mapping += [PSCustomObject]@{Channel=$best; Delta=$delta; Axis=$axes[$axis]; Min=$min; Max=$max}
+        Write-Host 'Asse rilevato. Puoi lasciare lo stick.'
+    }
+
+    Write-Host 'PONTE ATTIVO (v3). Apri Monitor vJoy oppure joy.cpl. Ctrl+C per terminare.'
+    $poll.Interval = 25
+    $poll.Timeout = 120
+    $consecutiveFastReplies = 0
+    $rateClock = [Diagnostics.Stopwatch]::StartNew()
+    $updates = 0
+    $misses = 0
+    $lastReply = [Diagnostics.Stopwatch]::StartNew()
+    $interrupted = $false
+    while ($true) {
+        $sample = @(Read-Sticks)
+        if ($rateClock.ElapsedMilliseconds -ge 3000) {
+            $rate = [Math]::Round($updates * 1000.0 / $rateClock.ElapsedMilliseconds, 1)
+            Write-Host "vJoy: $rate aggiornamenti/s | risposte mancate: $misses"
+            $rateClock.Restart()
+            $updates = 0
+            $misses = 0
+        }
+        if ($sample.Count -ne $offsets.Length) {
+            $misses++
+            $consecutiveFastReplies = 0
+            $poll.Interval = [Math]::Min(150, $poll.Interval + 15)
+            $poll.Timeout = 450
+            if (-not $interrupted -and $lastReply.ElapsedMilliseconds -ge 1500) {
+                Write-Host 'COM5 non risponde. Assi al centro, nuovo tentativo in corso...'
+                foreach ($item in $mapping) {
+                    $middle = [int][Math]::Round(($item.Min + $item.Max) / 2.0)
+                    $null = [MavicVJoyBridge]::SetAxis($middle, $device, $item.Axis)
+                }
+                $interrupted = $true
+            }
+            continue
+        }
+        $lastReply.Restart()
+        if ($poll.Last.ElapsedMilliseconds -lt 100) {
+            $consecutiveFastReplies++
+            if ($consecutiveFastReplies -ge 25) {
+                $poll.Interval = [Math]::Max(25, $poll.Interval - 5)
+                $poll.Timeout = 120
+                $consecutiveFastReplies = 0
+            }
+        } else {
+            $consecutiveFastReplies = 0
+        }
+        if ($interrupted) {
+            Write-Host 'COM5 risponde di nuovo.'
+            $interrupted = $false
+        }
+        foreach ($item in $mapping) {
+            $relative = ([int]$sample[$item.Channel] - [int]$center[$item.Channel]) / $item.Delta
+            $normalized = ([Math]::Max(-1.0, [Math]::Min(1.0, $relative)) + 1.0) / 2.0
+            $value = [int][Math]::Round($item.Min + $normalized * ($item.Max - $item.Min))
+            if (-not [MavicVJoyBridge]::SetAxis($value, $device, $item.Axis)) {
+                throw "vJoy non ha accettato il valore per l'asse $($item.Axis)."
+            }
+        }
+        $updates++
+    }
+} catch {
+    Write-Host ("ERRORE: " + $_.Exception.Message) -ForegroundColor Red
+} finally {
+    if ($acquired) { [MavicVJoyBridge]::RelinquishVJD($device) }
+    $serial.Dispose()
+}
+}

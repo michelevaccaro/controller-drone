@@ -1,0 +1,22 @@
+name: Windows build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and self-test
+        shell: cmd
+        run: Build.cmd --ci
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ControllerDrone-Windows-x64
+          path: dist/ControllerDrone.exe
+          if-no-files-found: error

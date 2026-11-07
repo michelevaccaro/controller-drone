@@ -1,0 +1,142 @@
+& {
+    $ErrorActionPreference = 'Stop'
+    try {
+        if (-not ('MavicMiniComDiagnostic' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO.Ports;
+using System.Threading;
+
+public static class MavicMiniComDiagnostic
+{
+    private const int SecondsPerPhase = 10;
+    private const int ReplyDeadlineMs = 180;
+
+    private static ushort Crc16(byte[] bytes, int count)
+    {
+        int crc = 0x3692;
+        for (int i = 0; i < count; i++)
+        {
+            crc ^= bytes[i];
+            for (int bit = 0; bit < 8; bit++)
+                crc = (crc >> 1) ^ ((crc & 1) == 0 ? 0 : 0x8408);
+        }
+        return (ushort)crc;
+    }
+
+    private static void WriteRequest(SerialPort port, byte[] request, ushort sequence)
+    {
+        request[6] = (byte)sequence;
+        request[7] = (byte)(sequence >> 8);
+        ushort crc = Crc16(request, request.Length - 2);
+        request[11] = (byte)crc;
+        request[12] = (byte)(crc >> 8);
+        port.Write(request, 0, request.Length);
+    }
+
+    private static bool ReadReply(SerialPort port, byte[] frame, ushort sequence,
+                                  Stopwatch clock, double deadline)
+    {
+        int position = 0;
+        while (clock.Elapsed.TotalMilliseconds < deadline)
+        {
+            int value;
+            try { value = port.ReadByte(); }
+            catch (TimeoutException) { continue; }
+
+            if (position == 0 && value != 0x55)
+                continue;
+            if (position == 1 && value != 0x26)
+            {
+                position = value == 0x55 ? 1 : 0;
+                continue;
+            }
+            frame[position++] = (byte)value;
+            if (position != frame.Length)
+                continue;
+
+            position = 0;
+            if ((frame[6] | (frame[7] << 8)) == sequence &&
+                frame[8] == 0x80 && frame[9] == 0x06 &&
+                Crc16(frame, 36) == (frame[36] | (frame[37] << 8)))
+                return true;
+        }
+        return false;
+    }
+
+    private static double Percentile(List<double> sorted, double fraction)
+    {
+        if (sorted.Count == 0)
+            return double.NaN;
+        return sorted[Math.Max(0, (int)Math.Ceiling(sorted.Count * fraction) - 1)];
+    }
+
+    public static void Run(string portName)
+    {
+        byte[] request = { 0x55, 0x0D, 0x04, 0x33, 0x0A, 0x0E, 0x03, 0x00,
+                           0x40, 0x06, 0x01, 0x00, 0x00 };
+        byte[] frame = new byte[38];
+        ushort sequence = 3;
+        using (var port = new SerialPort(portName, 115200, Parity.None, 8, StopBits.One))
+        {
+            port.ReadTimeout = 20;
+            port.WriteTimeout = 700;
+            port.Open();
+            port.DiscardInBuffer();
+
+            var warmup = Stopwatch.StartNew();
+            // The working diagnostic used this payload with sequence 3.
+            WriteRequest(port, request, sequence);
+            if (!ReadReply(port, frame, sequence, warmup, ReplyDeadlineMs + 400))
+                throw new InvalidOperationException("Nessuna risposta valida alla richiesta gia verificata. Controlla COM5 e il radiocomando.");
+
+            Console.WriteLine("COM5 risponde. Muovi lentamente gli stick durante il test.");
+            foreach (int interval in new[] { 80, 40, 20, 10 })
+            {
+                Console.WriteLine("Misurazione con intervallo minimo {0} ms...", interval);
+                var clock = Stopwatch.StartNew();
+                var latencies = new List<double>();
+                var gaps = new List<double>();
+                double lastReply = -1;
+                int sent = 0;
+                while (clock.Elapsed.TotalSeconds < SecondsPerPhase)
+                {
+                    double start = clock.Elapsed.TotalMilliseconds;
+                    sequence++;
+                    WriteRequest(port, request, sequence);
+                    sent++;
+                    if (ReadReply(port, frame, sequence, clock, start + ReplyDeadlineMs))
+                    {
+                        double now = clock.Elapsed.TotalMilliseconds;
+                        latencies.Add(now - start);
+                        if (lastReply >= 0)
+                            gaps.Add(now - lastReply);
+                        lastReply = now;
+                    }
+
+                    double wait = interval - (clock.Elapsed.TotalMilliseconds - start);
+                    if (wait > 0)
+                        Thread.Sleep((int)Math.Ceiling(wait));
+                }
+                double elapsed = clock.Elapsed.TotalSeconds;
+                latencies.Sort();
+                gaps.Sort();
+                Console.WriteLine(
+                    "RISULTATO {0} ms | {1:F1} risposte/s | valide {2}/{3} | latenza mediana {4:F1} ms | latenza P95 {5:F1} ms | intervallo P95 {6:F1} ms",
+                    interval, latencies.Count / elapsed, latencies.Count, sent,
+                    Percentile(latencies, 0.50), Percentile(latencies, 0.95),
+                    Percentile(gaps, 0.95));
+            }
+        }
+        Console.WriteLine("FINE TEST.");
+    }
+}
+'@
+        }
+        [MavicMiniComDiagnostic]::Run('COM5')
+    } catch {
+        Write-Host ('ERRORE: ' + $_.Exception.GetBaseException().Message) -ForegroundColor Red
+    }
+}
