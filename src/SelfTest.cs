@@ -28,23 +28,14 @@ internal static class SelfTest
         AxisBinding reverse = Program.LearnAxis(center, left, right, new HashSet<int>());
         Check(reverse.Read(left) == 1 && reverse.Read(right) == -1, "reverse physical orientation");
 
-        byte[] pressed = (byte[])center.Clone();
-        pressed[11] ^= 4;
-        ButtonBinding button = ButtonBinding.Learn(center, pressed, pressed, center,
-                                                   new[] { axis }, new ButtonBinding[0]);
-        Check(button.IsPressed(pressed) && !button.IsPressed(center), "button press and release");
-        ButtonBinding skipped = ButtonBinding.Learn(center, pressed, pressed, center,
-                                                    new[] { axis }, new[] { button });
-        Check(!skipped.IsPressed(pressed), "button bits cannot be reused");
         Check(Marshal.SizeOf(typeof(VirtualJoystick.Report)) == 108 &&
               Marshal.OffsetOf(typeof(VirtualJoystick.Report), "X").ToInt32() == 16 &&
               Marshal.OffsetOf(typeof(VirtualJoystick.Report), "Buttons").ToInt32() == 76,
               "vJoy report layout");
 
         var profile = new Profile();
-        foreach (int offset in new[] { 13, 16, 19, 22, 25 })
+        foreach (int offset in new[] { 13, 16, 19, 22 })
             profile.Axes.Add(new AxisBinding { Offset = offset, Center = 1024, Positive = 1684, Negative = 364 });
-        profile.Buttons.AddRange(new[] { button, skipped, new ButtonBinding() });
         string directory = Path.Combine(Path.GetTempPath(), "ControllerDroneTest-" + Guid.NewGuid().ToString("N"));
         string path = Path.Combine(directory, "test.xml");
         try
@@ -52,11 +43,19 @@ internal static class SelfTest
             profile.Save(path);
             profile.Save(path);
             Profile saved = Profile.Load(path);
-            Check(saved != null && saved.Axes.Count == 5 && saved.Buttons[0].IsPressed(pressed), "profile round trip");
+            Check(saved != null && saved.Axes.Count == 4, "profile round trip");
+            string xml = File.ReadAllText(path)
+                .Replace("</Axes>", "<AxisBinding><Offset>25</Offset><Center>1024</Center>" +
+                         "<Positive>1684</Positive><Negative>364</Negative></AxisBinding></Axes>")
+                .Replace("</Profile>", "<Buttons><ButtonBinding /></Buttons></Profile>");
+            File.WriteAllText(path, xml);
+            Profile legacy = Profile.Load(path);
+            Check(legacy != null && legacy.Axes.Count == 4 && legacy.Axes[3].Offset == 22,
+                  "legacy profile retains four stick axes");
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
 
-        Console.WriteLine("Self-test OK: protocollo, calibrazione, pulsanti, profilo e formato vJoy.");
+        Console.WriteLine("Self-test OK: protocollo, calibrazione, profilo e formato vJoy.");
     }
 
     private static byte[] Hex(string hex)

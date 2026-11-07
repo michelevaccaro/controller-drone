@@ -68,12 +68,11 @@ internal static class Program
         }
     }
 
-    private static bool Ask(string message, bool canSkip)
+    private static void Ask(string message)
     {
-        Console.WriteLine(message + (canSkip ? " Premi Invio oppure S + Invio per saltare." : " Premi Invio."));
+        Console.WriteLine(message + " Premi Invio.");
         string answer = Console.ReadLine();
         if (stopping || answer == null) throw new OperationCanceledException();
-        return !canSkip || !string.Equals(answer.Trim(), "s", StringComparison.OrdinalIgnoreCase);
     }
 
     private static byte[] Sample(MavicSerial radio)
@@ -87,19 +86,20 @@ internal static class Program
     private static Profile Calibrate(MavicSerial radio)
     {
         var profile = new Profile();
-        Ask("Lascia gli stick e la rotellina al centro.", false);
+        Ask("Lascia entrambi gli stick al centro.");
         byte[] center = Sample(radio);
         string[] controls = { "stick sinistro orizzontale", "stick sinistro verticale",
-                              "stick destro orizzontale", "stick destro verticale", "rotellina del gimbal" };
-        string[] positive = { "destra", "in basso", "destra", "in basso", "destra" };
-        string[] negative = { "sinistra", "in alto", "sinistra", "in alto", "sinistra" };
+                              "stick destro orizzontale", "stick destro verticale" };
+        string[] positive = { "destra", "in basso", "destra", "in basso" };
+        string[] negative = { "sinistra", "in alto", "sinistra", "in alto" };
         var used = new HashSet<int>();
         for (int i = 0; i < controls.Length; i++)
         {
-            while (Ask("Tieni " + controls[i] + " tutto " + positive[i] + ". Muovi solo questo comando.", i == 4))
+            while (true)
             {
+                Ask("Tieni " + controls[i] + " tutto " + positive[i] + ". Muovi solo questo comando.");
                 byte[] high = Sample(radio);
-                Ask("Ora tieni " + controls[i] + " tutto " + negative[i] + ".", false);
+                Ask("Ora tieni " + controls[i] + " tutto " + negative[i] + ".");
                 byte[] low = Sample(radio);
                 AxisBinding axis = LearnAxis(center, high, low, used);
                 if (axis == null)
@@ -113,25 +113,6 @@ internal static class Program
             }
         }
 
-        foreach (string name in new[] { "Video", "Foto", "Pausa/RTH" })
-        {
-            var binding = new ButtonBinding();
-            while (true)
-            {
-                if (!Ask("Rilascia i pulsanti per calibrare " + name + ".", true)) break;
-                byte[] before = Sample(radio);
-                Ask("Tieni premuto " + name + " mentre premi Invio.", false);
-                byte[] held = Sample(radio);
-                Thread.Sleep(40);
-                byte[] heldAgain = Sample(radio);
-                Ask("Rilascia " + name + ".", false);
-                byte[] released = Sample(radio);
-                binding = ButtonBinding.Learn(before, held, heldAgain, released, profile.Axes, profile.Buttons);
-                if (binding.IsPressed(held) && !binding.IsPressed(released)) break;
-                Console.WriteLine("Pulsante non rilevato. Puoi riprovare oppure saltarlo.");
-            }
-            profile.Buttons.Add(binding);
-        }
         return profile;
     }
 

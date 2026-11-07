@@ -6,7 +6,7 @@ internal sealed class VirtualJoystick : IDisposable
 {
     private const uint Device = 1;
     private const string Library = "vJoyInterface.dll";
-    private static readonly uint[] Usages = { 0x30, 0x31, 0x33, 0x34, 0x32 };
+    private static readonly uint[] Usages = { 0x30, 0x31, 0x33, 0x34 };
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Report
@@ -29,11 +29,9 @@ internal sealed class VirtualJoystick : IDisposable
     private static extern bool GetVJDAxisMin(uint id, uint usage, out int value);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern bool GetVJDAxisMax(uint id, uint usage, out int value);
-    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
-    private static extern int GetVJDButtonNumber(uint id);
 
-    private readonly int[] minimum = new int[5];
-    private readonly int[] maximum = new int[5];
+    private readonly int[] minimum = new int[4];
+    private readonly int[] maximum = new int[4];
     private readonly Report neutral;
 
     internal VirtualJoystick()
@@ -46,13 +44,11 @@ internal sealed class VirtualJoystick : IDisposable
             for (int i = 0; i < Usages.Length; i++)
                 if (!GetVJDAxisMin(Device, Usages[i], out minimum[i]) ||
                     !GetVJDAxisMax(Device, Usages[i], out maximum[i]) || maximum[i] <= minimum[i])
-                    throw new InvalidOperationException("Abilita X, Y, Z, Rx e Ry in Configure vJoy per Device 1.");
-            if (GetVJDButtonNumber(Device) < 3)
-                throw new InvalidOperationException("Configura almeno 3 pulsanti in Configure vJoy per Device 1.");
+                    throw new InvalidOperationException("Abilita X, Y, Rx e Ry in Configure vJoy per Device 1.");
 
             neutral = new Report {
                 Device = (byte)Device,
-                X = Scale(0, 0), Y = Scale(0, 1), Rx = Scale(0, 2), Ry = Scale(0, 3), Z = Scale(0, 4),
+                X = Scale(0, 0), Y = Scale(0, 1), Rx = Scale(0, 2), Ry = Scale(0, 3), Z = Scale(0, 0),
                 Rz = Scale(0, 0), Slider = Scale(0, 0), Dial = Scale(0, 0), Wheel = Scale(0, 0),
                 Hat1 = uint.MaxValue, Hat2 = uint.MaxValue, Hat3 = uint.MaxValue, Hat4 = uint.MaxValue
             };
@@ -95,9 +91,6 @@ internal sealed class VirtualJoystick : IDisposable
             report.Y = Scale(profile.Axes[1].Read(frame), 1);
             report.Rx = Scale(profile.Axes[2].Read(frame), 2);
             report.Ry = Scale(profile.Axes[3].Read(frame), 3);
-            if (profile.Axes.Count == 5) report.Z = Scale(profile.Axes[4].Read(frame), 4);
-            for (int i = 0; i < profile.Buttons.Count; i++)
-                if (profile.Buttons[i].IsPressed(frame)) report.Buttons |= 1u << i;
         }
         if (!UpdateVJD(Device, ref report))
             throw new InvalidOperationException("vJoy non ha accettato il report.");
