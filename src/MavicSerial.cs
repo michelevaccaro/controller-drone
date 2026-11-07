@@ -6,7 +6,16 @@ internal sealed class MavicSerial : IDisposable
 {
     internal const int PayloadStart = 11;
     internal const int PayloadEnd = 36;
-    internal static readonly int[] AxisOffsets = { 13, 16, 19, 22, 25, 28, 31, 34 };
+    internal const int GimbalOffset = 25;
+    internal static readonly int[] AxisOffsets = { 13, 16, 19, 22, GimbalOffset, 28, 31, 34 };
+
+    internal static double ReadGimbal(byte[] frame)
+    {
+        const int center = 1024;
+        const int travel = 660;
+        double position = (Value(frame, GimbalOffset) - center) / (double)travel;
+        return Math.Max(-1.0, Math.Min(1.0, position));
+    }
     internal readonly byte[] Frame = new byte[38];
     private readonly byte[] request = {
         0x55, 0x0D, 0x04, 0x33, 0x0A, 0x0E, 0x03, 0x00, 0x40, 0x06, 0x01, 0, 0

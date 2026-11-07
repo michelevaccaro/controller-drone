@@ -28,6 +28,13 @@ internal static class SelfTest
         AxisBinding reverse = Program.LearnAxis(center, left, right, new HashSet<int>());
         Check(reverse.Read(left) == 1 && reverse.Read(right) == -1, "reverse physical orientation");
 
+        byte[] wheelLeft = Hex("55 26 04 D1 0E 0A 03 00 80 06 01 00 00 00 04 00 00 04 00 00 04 00 00 04 00 6C 01 00 00 04 00 00 04 00 00 04 ED C9");
+        byte[] wheelRight = Hex("55 26 04 D1 0E 0A 03 00 80 06 01 00 00 00 04 00 00 04 00 00 04 00 00 04 00 94 06 00 00 04 00 00 04 00 00 04 63 7D");
+        Check(MavicSerial.IsReply(wheelLeft, 3) && MavicSerial.IsReply(wheelRight, 3), "captured gimbal replies");
+        Check(MavicSerial.ReadGimbal(wheelLeft) == -1 && MavicSerial.ReadGimbal(center) == 0 &&
+              MavicSerial.ReadGimbal(wheelRight) == 1, "gimbal direction and normalization");
+        Check(MavicSerial.ReadGimbal(right) == 0, "stick does not move gimbal");
+
         Check(Marshal.SizeOf(typeof(VirtualJoystick.Report)) == 108 &&
               Marshal.OffsetOf(typeof(VirtualJoystick.Report), "X").ToInt32() == 16 &&
               Marshal.OffsetOf(typeof(VirtualJoystick.Report), "Buttons").ToInt32() == 76,

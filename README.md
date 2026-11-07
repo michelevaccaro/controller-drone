@@ -5,7 +5,7 @@ Applicazione Windows per usare il radiocomando del DJI Mavic Mini originale (MR1
 ## Avvio
 
 1. Verifica che Windows veda il radiocomando sotto **Porte (COM e LPT)**. La porta predefinita è **COM5**.
-2. In **Configure vJoy**, abilita **Device 1**, gli assi **X, Y, Rx, Ry**.
+2. In **Configure vJoy**, abilita **Device 1**, gli assi **X, Y, Rx, Ry** e **Z** per la rotellina.
 3. Chiudi DJI Assistant 2, il ponte PowerShell precedente e vJoy Feeder. Scarica il sorgente, estrai lo ZIP ed esegui **Build.cmd** per generare `dist\ControllerDrone.exe`. Il compilatore di .NET Framework è già incluso nelle installazioni standard di Windows 11 x64.
 4. Avvia **ControllerDrone.exe**. Alla prima esecuzione, il programma chiede di calibrare i quattro assi degli stick. La calibrazione viene riutilizzata agli avvii successivi.
 5. Controlla il risultato con **Monitor vJoy** oppure **Win + R → joy.cpl**. Assegna i comandi nelle impostazioni del simulatore. Per uscire premi **Ctrl+C** nella console dell'app.
@@ -22,8 +22,9 @@ Per usare una porta diversa o ripetere la calibrazione, avvia da PowerShell:
 | --- | --- |
 | Stick sinistro | X, Y |
 | Stick destro | Rx, Ry |
+| Rotellina della camera | Z |
 
-L'app usa i quattro assi degli stick. I profili precedenti con una quinta associazione o con pulsanti vengono letti conservando la calibrazione dei quattro assi.
+La rotellina usa il centro e gli estremi misurati sul MR1SD25. La calibrazione salvata dei quattro assi degli stick viene riutilizzata. Assegna l’asse Z alla funzione desiderata nei simulatori che supportano questa associazione.
 
 ## Prestazioni e diagnosi
 

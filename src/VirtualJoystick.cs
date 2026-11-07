@@ -6,7 +6,7 @@ internal sealed class VirtualJoystick : IDisposable
 {
     private const uint Device = 1;
     private const string Library = "vJoyInterface.dll";
-    private static readonly uint[] Usages = { 0x30, 0x31, 0x33, 0x34 };
+    private static readonly uint[] Usages = { 0x30, 0x31, 0x33, 0x34, 0x32 };
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct Report
@@ -26,13 +26,17 @@ internal sealed class VirtualJoystick : IDisposable
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern bool UpdateVJD(uint id, ref Report report);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private static extern bool GetVJDAxisExist(uint id, uint usage);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern bool GetVJDAxisMin(uint id, uint usage, out int value);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern bool GetVJDAxisMax(uint id, uint usage, out int value);
 
-    private readonly int[] minimum = new int[4];
-    private readonly int[] maximum = new int[4];
+    private readonly int[] minimum = new int[Usages.Length];
+    private readonly int[] maximum = new int[Usages.Length];
     private readonly Report neutral;
+    private readonly bool hasGimbalAxis;
 
     internal VirtualJoystick()
     {
@@ -41,14 +45,22 @@ internal sealed class VirtualJoystick : IDisposable
             throw new InvalidOperationException("vJoy Device 1 occupato o disabilitato. Chiudi il vecchio ponte e vJoy Feeder.");
         try
         {
-            for (int i = 0; i < Usages.Length; i++)
+            for (int i = 0; i < 4; i++)
                 if (!GetVJDAxisMin(Device, Usages[i], out minimum[i]) ||
                     !GetVJDAxisMax(Device, Usages[i], out maximum[i]) || maximum[i] <= minimum[i])
                     throw new InvalidOperationException("Abilita X, Y, Rx e Ry in Configure vJoy per Device 1.");
 
+            const int gimbal = 4;
+            hasGimbalAxis = GetVJDAxisExist(Device, Usages[gimbal]) &&
+                GetVJDAxisMin(Device, Usages[gimbal], out minimum[gimbal]) &&
+                GetVJDAxisMax(Device, Usages[gimbal], out maximum[gimbal]) &&
+                maximum[gimbal] > minimum[gimbal];
+            if (!hasGimbalAxis)
+                Console.WriteLine("Per usare la rotellina, abilita Z in Configure vJoy per Device 1 e riavvia Controller Drone.");
+
             neutral = new Report {
                 Device = (byte)Device,
-                X = Scale(0, 0), Y = Scale(0, 1), Rx = Scale(0, 2), Ry = Scale(0, 3), Z = Scale(0, 0),
+                X = Scale(0, 0), Y = Scale(0, 1), Rx = Scale(0, 2), Ry = Scale(0, 3), Z = Scale(0, hasGimbalAxis ? gimbal : 0),
                 Rz = Scale(0, 0), Slider = Scale(0, 0), Dial = Scale(0, 0), Wheel = Scale(0, 0),
                 Hat1 = uint.MaxValue, Hat2 = uint.MaxValue, Hat3 = uint.MaxValue, Hat4 = uint.MaxValue
             };
@@ -91,6 +103,7 @@ internal sealed class VirtualJoystick : IDisposable
             report.Y = Scale(profile.Axes[1].Read(frame), 1);
             report.Rx = Scale(profile.Axes[2].Read(frame), 2);
             report.Ry = Scale(profile.Axes[3].Read(frame), 3);
+            if (hasGimbalAxis) report.Z = Scale(MavicSerial.ReadGimbal(frame), 4);
         }
         if (!UpdateVJD(Device, ref report))
             throw new InvalidOperationException("vJoy non ha accettato il report.");

@@ -92,7 +92,7 @@ internal static class Program
                               "stick destro orizzontale", "stick destro verticale" };
         string[] positive = { "destra", "in basso", "destra", "in basso" };
         string[] negative = { "sinistra", "in alto", "sinistra", "in alto" };
-        var used = new HashSet<int>();
+        var used = new HashSet<int> { MavicSerial.GimbalOffset };
         for (int i = 0; i < controls.Length; i++)
         {
             while (true)
